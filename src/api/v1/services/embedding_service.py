@@ -1,6 +1,7 @@
 import shutil
 from pathlib import Path
 from fastapi import UploadFile
+from ingestion.ingestion import ingest_pdf
 
 
 # receive the document as user input and save it inside the data directory

@@ -3,7 +3,7 @@ from api.v1.services import add_document
 
 router = APIRouter(
     prefix="/api/v1",
-    tags=["products"]
+    tags=["creditcards","spendsummary","creditcardsummary"]
 )
 
 @router.post("/embed/multimodel/document")
