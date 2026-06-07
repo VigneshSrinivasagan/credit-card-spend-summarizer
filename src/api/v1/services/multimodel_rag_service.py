@@ -2,6 +2,7 @@ import shutil
 from pathlib import Path
 from fastapi import UploadFile
 from ingestion.ingestion import ingest_pdf
+from src.api.v1.agents.agents import run_search_agent
 
 
 # receive the document as user input and save it inside the data directory
@@ -29,3 +30,7 @@ async def add_document(file: UploadFile):
         "filename": file.filename,
         "file_path": str(file_path)
     }
+
+
+def query_documents(query: str):
+   return run_search_agent(query)

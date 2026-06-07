@@ -3,9 +3,8 @@ import hashlib
 import json
 import os
 import pathlib
-
-
 import psycopg
+
 from dotenv import load_dotenv
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
@@ -52,18 +51,13 @@ _embeddings = OpenAIEmbeddings(
 )
 
 
-
-
 def _embed_texts(texts: list[str]) -> list[list[float]]:
    """Embed a batch of text strings with OpenAI text-embedding-3-small.
 
-
-   OpenAIEmbeddings handles request batching internally, so we pass the whole
-   list and get back one 1536-dimensional vector per input string.
+    OpenAIEmbeddings handles request batching internally, so we pass the whole
+    list and get back one 1536-dimensional vector per input string.
    """
    return _embeddings.embed_documents(texts)
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -72,8 +66,6 @@ def _embed_texts(texts: list[str]) -> list[list[float]]:
 # import time when the DB is not yet available (e.g. during tests).
 # ---------------------------------------------------------------------------
 _pool: ConnectionPool | None = None
-
-
 
 
 def _get_pool() -> ConnectionPool:
@@ -89,33 +81,25 @@ def _get_pool() -> ConnectionPool:
    return _pool
 
 
-
-
 def get_db_conn():
    """Return a pooled connection context manager.
 
-
-   Usage:
-       with get_db_conn() as conn:
-           with conn.cursor() as cur: ...
+        Usage:
+        with get_db_conn() as conn:
+            with conn.cursor() as cur: ...
    """
    return _get_pool().connection()
-
-
 
 
 # ---------------------------------------------------------------------------
 # Document registry
 # ---------------------------------------------------------------------------
-
-
 def upsert_document(filename: str, source_path: str) -> str:
    """Insert a document record and return its UUID.
 
-
-   Uses ON CONFLICT so re-ingesting the same filename updates the path
-   and returns the *existing* doc_id rather than creating a duplicate.
-   This makes ingestion idempotent at the document level.
+    Uses ON CONFLICT so re-ingesting the same filename updates the path
+    and returns the *existing* doc_id rather than creating a duplicate.
+    This makes ingestion idempotent at the document level.
    """
    with get_db_conn() as conn:
        with conn.cursor() as cur:
@@ -135,13 +119,9 @@ def upsert_document(filename: str, source_path: str) -> str:
    return str(row["id"])
 
 
-
-
 # ---------------------------------------------------------------------------
 # Chunk storage
 # ---------------------------------------------------------------------------
-
-
 def store_chunks(chunks: list[dict], doc_id: str) -> int:
    """Embed each chunk and insert it into the multimodal_chunks table.
 

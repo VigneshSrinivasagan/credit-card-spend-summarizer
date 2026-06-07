@@ -27,11 +27,8 @@ _TEXT_CHUNK_SIZE = 1500
 _TEXT_CHUNK_OVERLAP = 300
 
 
-
-
 def _split_text(text: str, chunk_size: int, overlap: int) -> list[str]:
    """Split a long string into overlapping character windows.
-
 
    Splitting strategy:
      - Walks through the text in steps of (chunk_size - overlap)
@@ -39,10 +36,10 @@ def _split_text(text: str, chunk_size: int, overlap: int) -> list[str]:
      - The overlap ensures sentences cut at a boundary appear in both the
        preceding and following chunk, preserving retrieval context
 
-
    This is a lightweight alternative to langchain_text_splitters which is
    not installed in this environment.
    """
+
    chunks: list[str] = []
    start = 0
    step = chunk_size - overlap
@@ -52,11 +49,8 @@ def _split_text(text: str, chunk_size: int, overlap: int) -> list[str]:
    return chunks
 
 
-
-
 def run_ingestion(file_path: str) -> dict:
    """Run the full ingestion pipeline for a single PDF file.
-
 
    Steps:
      1. Register the document in the `documents` table → get a stable doc_id
@@ -64,16 +58,13 @@ def run_ingestion(file_path: str) -> dict:
      3. Split long text elements into overlapping chunks
      4. Embed all chunks and store in `multimodal_chunks` via db.store_chunks()
 
-
    Args:
        file_path: Absolute or relative path to the source PDF.
-
 
    Returns:
        Dict with "status", "doc_id", and "chunks_ingested" count.
    """
    resolved = pathlib.Path(file_path).resolve()
-
 
    # ── Step 1: Register (or update) the document record ─────────────────────
    # upsert_document() inserts into the `documents` table and returns a UUID.
@@ -82,14 +73,12 @@ def run_ingestion(file_path: str) -> dict:
    doc_id = upsert_document(resolved.name, str(resolved))
    print(f"[ingestion] doc_id={doc_id}  file={file_path}")
 
-
    # ── Step 2: Parse the PDF ─────────────────────────────────────────────────
    # parse_document() runs the full Docling pipeline and returns a flat list.
    # Each element: {content, content_type, metadata{page_number, section, …}}
    print(f"[ingestion] Parsing: {file_path}")
    parsed_elements = parse_document(file_path)
    print(f"[ingestion] Docling produced {len(parsed_elements)} elements")
-
 
    # ── Step 3: Split long text elements into overlapping chunks ──────────────
    # Tables and images are stored as atomic units — never split.
@@ -108,9 +97,7 @@ def run_ingestion(file_path: str) -> dict:
        else:
            chunks.append(elem)
 
-
    print(f"[ingestion] {len(chunks)} chunks ready for embedding")
-
 
    # ── Step 4: Embed chunks and store in multimodal_chunks ───────────────────
    # store_chunks() calls embed_documents() in batches, then INSERTs each row
@@ -118,7 +105,6 @@ def run_ingestion(file_path: str) -> dict:
    # (BYTEA), page/section metadata, and bounding-box position (JSONB).
    count = store_chunks(chunks, doc_id)
    print(f"[ingestion] Stored {count} chunks → multimodal_chunks")
-
 
    return {"status": "success", "doc_id": doc_id, "chunks_ingested": count}
 
@@ -146,7 +132,7 @@ def ingest_pdf(pdf_file_path):
    print(f"\nIngestion complete: {result}")
 
 
-# ---------------------------------------------------------------------------
+# ------------------FOR TESTING INGESTION------------------------------------
 # Run ingestion directly:
 #   uv run python -m src.ingestion.ingestion
 # or from the project root:

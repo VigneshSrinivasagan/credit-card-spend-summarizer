@@ -2,7 +2,6 @@ import base64
 import io
 import os
 
-
 from dotenv import load_dotenv
 from docling.datamodel.base_models import InputFormat
 from langchain_core.messages import HumanMessage
@@ -33,7 +32,6 @@ load_dotenv()
 #   page_header     — running header printed on every page  ← NOISE, skipped
 #   page_footer     — running footer printed on every page  ← NOISE, skipped
 # ---------------------------------------------------------------------------
-
 def get_image_context(img_b64: str) -> str:
     """
     Generate a rich, searchable description of an image for indexing and retrieval.
@@ -77,9 +75,9 @@ def get_image_context(img_b64: str) -> str:
         print(f" Exception : {e}")
         return ""
 
+
 def parse_document(file_path: str) -> list[dict]:
    """Parse a PDF into a flat list of typed content chunks using Docling.
-
 
    Each chunk is a dict with three keys:
      content      — text or markdown representation of the element
@@ -87,12 +85,10 @@ def parse_document(file_path: str) -> list[dict]:
      metadata     — dict with: content_type, element_type, section,
                     page_number, source_file, image_base64
 
-
    The metadata is passed to PGVector, so every
    retrieved chunk tells the query layer what kind of content it is
    and where in the document it came from.
    """
-
 
    # ── Step 1: Configure Docling pipeline ───────────────────────────────────
    # do_ocr=True          — run OCR on scanned/rasterised pages so text is
@@ -113,14 +109,12 @@ def parse_document(file_path: str) -> list[dict]:
        accelerator_options=AcceleratorOptions(device=AcceleratorDevice.CPU),
    )
 
-
    converter = DocumentConverter(
        allowed_formats=[InputFormat.PDF],
        format_options={
            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
        },
    )
-
 
    # ── Step 2: Convert the PDF ───────────────────────────────────────────────
    # converter.convert() runs the full Docling pipeline:
@@ -129,13 +123,11 @@ def parse_document(file_path: str) -> list[dict]:
    result = converter.convert(file_path)
    doc = result.document
 
-
    parsed_chunks: list[dict] = []
    # Tracks the most recently seen section heading so every chunk carries
    # the section name it belongs to — useful for filtered retrieval.
    current_section: str | None = None
    source_file = os.path.basename(file_path)
-
 
    # ── Step 3: Walk the document element tree ────────────────────────────────
    # iterate_items() yields (level, node) tuples in Docling >= 2.x.
@@ -146,18 +138,15 @@ def parse_document(file_path: str) -> list[dict]:
        else:
            node = item     # older Docling versions yield bare nodes
 
-
        # label is a DocItemLabel enum value — convert to lowercase string
        # for pattern matching (e.g. "section_header", "table", "picture")
        label = str(getattr(node, "label", "")).lower()
-
 
        # ── Skip page headers/footers ─────────────────────────────────────────
        # These repeat on every page (document title, page number, date stamp)
        # and would pollute retrieval results with irrelevant noise.
        if label in ("page_header", "page_footer"):
            continue
-
 
        # ── Extract page number and bounding box from provenance ──────────────
        # prov is a list of ProvenanceItem; prov[0] covers the first (usually
@@ -171,10 +160,8 @@ def parse_document(file_path: str) -> list[dict]:
            b = prov[0].bbox
            position = {"l": b.l, "t": b.t, "r": b.r, "b": b.b}
 
-
        def _make_metadata(content_type: str, element_type: str, img_b64=None):
            """Build a metadata dict that is stored alongside every chunk.
-
 
            content_type  — "text" | "table" | "image"  (used by the query
                            layer to decide how to render retrieved content)
@@ -182,6 +169,7 @@ def parse_document(file_path: str) -> list[dict]:
            img_b64       — base64-encoded PNG string for image elements;
                            None for text and table elements
            """
+          
            return {
                "content_type": content_type,
                "element_type": element_type,
@@ -191,7 +179,6 @@ def parse_document(file_path: str) -> list[dict]:
                "position": position,       # bounding box stored in JSONB position column
                "image_base64": img_b64,    # decoded to BYTEA by db.store_chunks()
            }
-
 
        # ── Section headings & document title ─────────────────────────────────
        # Update current_section so all subsequent chunks carry the correct
@@ -207,7 +194,6 @@ def parse_document(file_path: str) -> list[dict]:
                        "metadata": _make_metadata("text", label),
                    }
                )
-
 
        # ── Tables ────────────────────────────────────────────────────────────
        # Convert table cells to clean "Header: value" plain text rows so
@@ -264,7 +250,6 @@ def parse_document(file_path: str) -> list[dict]:
                    }
                )
 
-
        # ── Pictures, figures, and charts ─────────────────────────────────────
        # Charts are rendered images in Docling (no structured data is
        # extracted), so they are handled identically to pictures.
@@ -279,7 +264,6 @@ def parse_document(file_path: str) -> list[dict]:
            # .text on a PictureItem is the inline caption, if any
            caption = getattr(node, "text", "") or ""
 
-
            try:
                if hasattr(node, "get_image"):
                    pil_img = node.get_image(doc)
@@ -287,7 +271,6 @@ def parse_document(file_path: str) -> list[dict]:
                        buf = io.BytesIO()
                        pil_img.save(buf, format="PNG")
                        img_b64 = base64.b64encode(buf.getvalue()).decode()
-
 
                # Fallback path for older Docling versions
                if img_b64 is None and hasattr(node, "image") and node.image:
@@ -300,7 +283,6 @@ def parse_document(file_path: str) -> list[dict]:
                # Image extraction is best-effort; a missing image is not
                # fatal — the caption / placeholder text is still indexed.
                pass
-
 
            # Use an OpenAI vision model to generate a rich description for this
            # image. This becomes the chunk's searchable text content — far more
@@ -319,7 +301,6 @@ def parse_document(file_path: str) -> list[dict]:
                 }
            )
 
-
        # ── Plain text: paragraphs, list items, captions, footnotes, etc. ─────
        # Everything that is not a heading, table, or image falls here.
        # Empty nodes (layout artefacts with no text) are silently dropped.
@@ -333,6 +314,5 @@ def parse_document(file_path: str) -> list[dict]:
                        "metadata": _make_metadata("text", label),
                    }
                )
-
 
    return parsed_chunks
