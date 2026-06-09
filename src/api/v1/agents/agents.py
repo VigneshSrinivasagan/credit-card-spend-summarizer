@@ -736,12 +736,15 @@ def build_rag_graph():
 
     compiled_agent = graph.compile()
 
-    graph_image = compiled_agent.get_graph().draw_mermaid_png()
-
     os.makedirs("references", exist_ok=True)
+    
+    try:
+        mermaid_code = compiled_agent.get_graph().draw_mermaid()
+        with open("rag_graph.mmd", "w", encoding="utf-8") as f:
+            f.write(mermaid_code)
+    except Exception as e:
+        print(f"Graph generation skipped: {e}")
 
-    with open("references/credit_card_spend_summarizer.png", "wb") as f:
-        f.write(graph_image)
 
     return compiled_agent
 

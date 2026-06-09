@@ -1,38 +1,54 @@
-import shutil
 from pathlib import Path
-from fastapi import UploadFile
+from fastapi import UploadFile, HTTPException
+from starlette.concurrency import run_in_threadpool
+
 from src.ingestion.ingestion import ingest_pdf
-from src.api.v1.agents.agents import run_search_agent,run_search_agent_static
+from src.api.v1.agents.agents import run_search_agent, run_search_agent_static
+
+import os
 
 
-# receive the document as user input and save it inside the data directory
+DATA_DIR = Path("src/api/data").resolve()
+ALLOWED_EXTENSIONS = {".pdf"}
+
+
 async def add_document(file: UploadFile):
     """
-    Save uploaded document to the data directory
+    Save uploaded PDF document to the data directory and ingest it.
     """
-    # Define the data directory path
-    data_dir = Path(__file__).parent.parent.parent / "data"
-    data_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save the file directly
-    file_path = data_dir / file.filename
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Filename is missing.")
 
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    ext = Path(file.filename).suffix.lower()
 
-    print(f"file path : {file_path}")
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=415,
+            detail=f"File type '{ext}' is not supported."
+        )
 
-    # ingestion method called
-    ingest_pdf(file_path)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    safe_filename = Path(file.filename).name
+    saved_path = DATA_DIR / safe_filename
+
+    content = await file.read()
+
+    with open(saved_path, "wb") as f:
+        f.write(content)
+
+    await run_in_threadpool(ingest_pdf, str(saved_path))
 
     return {
-        "message": "Document added and ingested successfully",
-        "filename": file.filename,
-        "file_path": str(file_path),
+        "message": f"'{safe_filename}' uploaded and ingested successfully.",
+        "saved_path": str(saved_path),
     }
+
 
 def query_documents_static(query: str):
     return run_search_agent_static(query)
+
 
 async def query_documents(query: str):
     return run_search_agent(query)

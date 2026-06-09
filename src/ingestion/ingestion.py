@@ -1,8 +1,8 @@
 import os
 import pathlib
+import sys
 
 from dotenv import load_dotenv
-
 
 from src.core.db import store_chunks, upsert_document
 from src.ingestion.docling_parser import parse_document
@@ -114,22 +114,16 @@ def run_ingestion(file_path: str) -> dict:
 
 def ingest_pdf(pdf_file_path):
     print("Ingestion Started")
-    import sys
 
-    # Issue 12 fix: Accept the PDF path as a command-line argument so any
-    # document can be ingested without editing the source code.
-    # Usage: uv run python -m src.ingestion.ingestion path/to/file.pdf
-    # Falls back to the default development PDF when no argument is provided.
-    if len(sys.argv) >= 2:
-        pdf_path = pathlib.Path(sys.argv[1])
-    else:
-        pdf_path = pathlib.Path(pdf_file_path)
+    pdf_path = pathlib.Path(pdf_file_path)
 
     if not pdf_path.exists():
         raise FileNotFoundError(f"PDF not found at: {pdf_path.resolve()}")
 
     result = run_ingestion(str(pdf_path))
     print(f"\nIngestion complete: {result}")
+
+    return result
 
 
 # ------------------FOR TESTING INGESTION------------------------------------
@@ -139,4 +133,9 @@ def ingest_pdf(pdf_file_path):
 #   python src/ingestion/ingestion.py
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    ingest_pdf("data/KB_Credit_Card_Spend_Summarizer.pdf")
+    if len(sys.argv) >= 2:
+        input_pdf_path = sys.argv[1]
+    else:
+        input_pdf_path = "src/api/data/KB_Credit_Card_Spend_Summarizer.pdf"
+
+    ingest_pdf(input_pdf_path)
