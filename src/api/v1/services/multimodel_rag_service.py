@@ -4,10 +4,9 @@ from starlette.concurrency import run_in_threadpool
 
 from src.ingestion.ingestion import ingest_pdf
 from src.core.guardrails import guard_input, guard_output
-from src.api.v1.agents.agents import run_search_agent, run_search_agent_static
+from src.api.v1.agents.agents import run_search_agent
 
-import os
-
+import os, json
 
 DATA_DIR = Path("src/api/data").resolve()
 ALLOWED_EXTENSIONS = {".pdf"}
@@ -25,8 +24,7 @@ async def add_document(file: UploadFile):
 
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
-            status_code=415,
-            detail=f"File type '{ext}' is not supported."
+            status_code=415, detail=f"File type '{ext}' is not supported."
         )
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -47,16 +45,96 @@ async def add_document(file: UploadFile):
     }
 
 
-def query_documents_static(query: str):
-    return run_search_agent_static(query)
+def apply_output_guard(value):
+    """
+    Recursively apply guard_output to every string inside the response.
 
+    Handles:
+    - str
+    - dict
+    - list
+    - tuple
+
+    Example:
+        (True, "Robert Clarke") 
+        becomes 
+        (True, "<PERSON>")
+    """
+
+    if isinstance(value, str):
+        return guard_output(value)
+
+    if isinstance(value, dict):
+        return {
+            key: apply_output_guard(item)
+            for key, item in value.items()
+        }
+
+    if isinstance(value, list):
+        return [
+            apply_output_guard(item)
+            for item in value
+        ]
+
+    if isinstance(value, tuple):
+        return tuple(
+            apply_output_guard(item)
+            for item in value
+        )
+
+    return value
+
+
+# async def query_documents(query: str, chat_history: list = None):
+#     chat_history = chat_history or []
+#     guard_input(query)
+#     result = run_search_agent(query, chat_history)
+
+#     print(f"RAW RESULT BEFORE OUTPUT GUARD: {result}")
+
+#     if isinstance(result, dict):
+#         print("Inside the isinstance(result, dict): ", result)
+#         for key in ["answer", "output", "response", "final_answer"]:
+#             if isinstance(result.get(key), str):
+#                 print(f"BEFORE OUTPUT GUARD [{key}]:", result[key])
+#                 result[key] = guard_output(result[key])
+#                 print(f"AFTER OUTPUT GUARD [{key}]:", result[key])
+
+#     elif isinstance(result, str):
+#         result = guard_output(result)
+
+#     return result
 
 
 async def query_documents(query: str, chat_history: list = None):
     chat_history = chat_history or []
     guard_input(query)
-    result = run_search_agent(query, chat_history)
-    print(result)
-    if isinstance(result, dict) and result.get("answer"):
-        result["answer"] = guard_output(result["answer"])
+
+    # Collect streamed chunks from the async generator
+    collected_payload = None
+    async for chunk in run_search_agent(query, chat_history):
+        if chunk.startswith("data: ") and "[DONE]" not in chunk:
+            raw_json = chunk.removeprefix("data: ").strip()
+            try:
+                collected_payload = json.loads(raw_json)
+            except json.JSONDecodeError:
+                pass
+
+    if collected_payload is None:
+        return {"answer": "No response received."}
+
+    result = collected_payload
+    print(f"RAW RESULT BEFORE OUTPUT GUARD: {result}")
+
+    # Apply output guard
+    if isinstance(result, dict):
+        for key in ["answer", "output", "response", "final_answer"]:
+            if isinstance(result.get(key), str):
+                print(f"BEFORE OUTPUT GUARD [{key}]:", result[key])
+                result[key] = guard_output(result[key])
+                print(f"AFTER OUTPUT GUARD [{key}]:", result[key])
+                break  # ← guard only the first matching key, not multiple
+    elif isinstance(result, str):
+        result = guard_output(result)
+
     return result

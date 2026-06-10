@@ -579,28 +579,14 @@ def build_chat_history(max_messages: int = 10) -> list:
     return history
 
 
-
 def query_backend_stream(query: str, chat_history: list = None):
-    """
-    Calls FastAPI streaming query endpoint and returns the accumulated answer.
-
-    Backend route expected:
-    POST /multimodelrag/query/stream
-
-    JSON body sent:
-    {
-        "query": "current user question",
-        "chat_history": [
-            {"role": "user", "content": "previous question"},
-            {"role": "assistant", "content": "previous answer"}
-        ]
-    }
-    """
     try:
         payload = {
             "query": query,
             "chat_history": chat_history or []
         }
+
+        print(f"Calling endpoint: {QUERY_STREAM_ENDPOINT}")  # ← ADD THIS
 
         with requests.post(
             QUERY_STREAM_ENDPOINT,
@@ -610,45 +596,42 @@ def query_backend_stream(query: str, chat_history: list = None):
             headers={"Accept": "text/event-stream"},
         ) as response:
             response.raise_for_status()
-
-            full_answer_parts = []
+            actual_answer = None
+            full_payload = None
 
             for line in response.iter_lines(decode_unicode=True):
+                print(f"RAW LINE: {repr(line)}")  # ← ADD THIS
+
                 if not line:
                     continue
-
                 chunk = line.strip()
-
                 if chunk.startswith("data:"):
                     chunk = chunk.replace("data:", "", 1).strip()
-
                 if chunk in {"[DONE]", "DONE"}:
                     break
+                try:
+                    parsed = json.loads(chunk)
+                    print(f"PARSED: {parsed}")  # ← ADD THIS
+                    full_payload = parsed
+                    actual_answer = parsed.get("answer", "").strip()
+                except json.JSONDecodeError as e:
+                    print(f"JSON DECODE FAILED: {repr(chunk)} | error: {e}")  # ← ADD THIS
+                    continue
 
-                full_answer_parts.append(chunk)
+            if not actual_answer:
+                actual_answer = "I could not generate a response from the backend."
 
-            full_answer = "".join(full_answer_parts).strip()
-            print(f"full answer ---------------- {full_answer}")
-            if not full_answer:
-                full_answer = "I could not generate a response from the backend."
-
-            actual_answer = extract_actual_answer(full_answer)
-
+            print(f"full payload: {full_payload}")
+            print(f"actual answer: {actual_answer}")
             return True, actual_answer
 
     except requests.exceptions.Timeout:
         return False, "Query request timed out. Please try again."
-
     except requests.exceptions.ConnectionError:
-        return (
-            False,
-            f"Could not connect to backend at {API_BASE_URL}. Please verify FastAPI is running.",
-        )
-
+        return False, f"Could not connect to backend at {API_BASE_URL}. Please verify FastAPI is running."
     except requests.exceptions.HTTPError as e:
         error_text = e.response.text if e.response is not None else str(e)
         return False, f"Backend returned HTTP error: {error_text}"
-
     except requests.exceptions.RequestException as e:
         return False, f"Backend query failed: {str(e)}"
 

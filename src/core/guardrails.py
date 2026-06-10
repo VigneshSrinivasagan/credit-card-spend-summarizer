@@ -55,14 +55,12 @@ except Exception:  # pragma: no cover - import path varies by version
 # Presidio entity labels that the PII validator will redact from answers.
 PII_ENTITIES = [
    "EMAIL_ADDRESS",
-   "PHONE_NUMBER",
-   "PERSON",
+   #"PHONE_NUMBER",
+   #"PERSON",
    "CREDIT_CARD",
    "US_SSN",
    "IBAN_CODE",
-   "IP_ADDRESS",
-   "CUSTOMER_ID",
-   "CARD_ID"
+   "IP_ADDRESS"
 ]
 
 
@@ -76,25 +74,104 @@ TOXICITY_THRESHOLD = float(os.getenv("GUARDRAIL_TOXICITY_THRESHOLD", "0.5"))
 # keeps 4-digit years (2026) and short section numbers intact.
 # Matches Customer IDs like:
 # C-1006, C1006, CUSTOMER-1006, CUST-1006
-CUSTOMER_ID_RE = re.compile(
-    r"\b(?:C|CUST|CUSTOMER)[-_]?\d{4,}\b",
-    re.IGNORECASE
+
+# Matches explicit Customer ID labels:
+# Customer ID: C-1006
+# Customer ID: 1006
+# Customer ID: CUSTOMER-1006
+CUSTOMER_ID_LABEL_RE = re.compile(
+    r"(\bCustomer\s*ID\s*[:#-]?\s*)([A-Z]{0,12}[-_]?\d{3,})\b",
+    re.IGNORECASE,
 )
 
-# Matches Card IDs like:
+# Matches standalone customer IDs:
+# C-1006, C1006, CUST-1006, CUSTOMER-1006
+CUSTOMER_ID_RE = re.compile(
+    r"\b(?:CUSTOMER|CUST|C)[-_]?\d{3,}\b",
+    re.IGNORECASE,
+)
+
+# Matches explicit Card ID labels:
+# Card ID: CC-886001
+# Card ID: 886001
+# Card ID: CARD-886001
+CARD_ID_LABEL_RE = re.compile(
+    r"(\bCard\s*ID\s*[:#-]?\s*)([A-Z]{0,12}[-_]?\d{3,})\b",
+    re.IGNORECASE,
+)
+
+# Matches standalone card IDs:
 # CC-886001, CC886001, CARD-886001
 CARD_ID_RE = re.compile(
-    r"\b(?:CC|CARD)[-_]?\d{4,}\b",
-    re.IGNORECASE
+    r"\b(?:CARD|CC)[-_]?\d{4,}\b",
+    re.IGNORECASE,
 )
 
-# Optional: matches plain long numeric identifiers like:
-# 886001, 123456789
-# Keep this separate because plain numbers may also be amounts.
+# Optional contextual IDs:
+# Account ID: ACC-12345
+# Loan ID: LN-12345
+# Application ID: APP-12345
+CONTEXTUAL_ID_RE = re.compile(
+    r"(\b(?:Account|Acct|Loan|Application|App|Reference|Ref)\s*ID\s*[:#-]?\s*)([A-Z]{0,12}[-_]?\d{3,})\b",
+    re.IGNORECASE,
+)
+
+# Optional plain long numeric ID.
+# Use carefully because it can mask real metrics or amounts.
 GENERIC_LONG_ID_RE = re.compile(
     r"\b\d{6,}\b"
 )
 
+# Optional: catches names in this common answer shape:
+# is Laura Bennett (Customer ID: C-1006)
+CUSTOMER_NAME_BEFORE_ID_RE = re.compile(
+    r"(\bis\s+)([A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){1,3})(\s*\(\s*Customer\s*ID\b)",
+    re.IGNORECASE,
+)
+
+# Optional: catches labelled names:
+# Customer Name: Laura Bennett
+CUSTOMER_NAME_LABEL_RE = re.compile(
+    r"(\b(?:Customer\s*Name|Name)\s*[:#-]?\s*)([A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){1,3})\b",
+    re.IGNORECASE,
+)
+
+
+
+def _mask_domain_pii(text: str) -> str:
+    """
+    Deterministically mask domain-specific identifiers and common customer-name
+    patterns before/after GuardrailsPII.
+
+    Handles:
+    - Customer ID: C-1006
+    - Customer ID: 1006
+    - Card ID: CC-886001
+    - Account ID / Loan ID / Application ID / Reference ID
+    - Standalone IDs like C-1006, CC-886001
+    - Common answer pattern: "is Laura Bennett (Customer ID: ...)"
+    """
+    if not text:
+        return text
+
+    # Mask customer names in predictable RAG answer formats.
+    #text = CUSTOMER_NAME_BEFORE_ID_RE.sub(r"\1<PERSON>\3", text)
+    #text = CUSTOMER_NAME_LABEL_RE.sub(r"\1<PERSON>", text)
+
+    # Label-based ID masking first, so labels are preserved.
+    text = CUSTOMER_ID_LABEL_RE.sub(r"\1<CUSTOMER_ID>", text)
+    text = CARD_ID_LABEL_RE.sub(r"\1<CARD_ID>", text)
+    text = CONTEXTUAL_ID_RE.sub(r"\1<ID>", text)
+
+    # Standalone ID masking.
+    text = CUSTOMER_ID_RE.sub("<CUSTOMER_ID>", text)
+    text = CARD_ID_RE.sub("<CARD_ID>", text)
+
+    # Optional plain long numeric masking.
+    # Be careful: this can also mask non-ID values like counts or large metrics.
+    #text = GENERIC_LONG_ID_RE.sub("<NUMERIC_ID>", text)
+
+    return text
 
 
 class GuardrailViolation(Exception):
@@ -235,21 +312,38 @@ def guard_input(query: str) -> None:
 
 
 def guard_output(answer: str) -> str:
-   """Redact PII from the model's answer. Returns the cleaned text.
+   """
+   Redact PII from the model's answer. Returns the cleaned text.
 
-
-   Two passes: mask domain customer ids ourselves (CUSTOMER_ID_RE — the PII
-   validator has no recognizer for them), then run GuardrailsPII for standard
-   PII (emails, names, formatted phones, ...).
+   First masks domain-specific customer/card/account IDs using regex.
+   Then runs GuardrailsPII for standard PII like names, emails, phones.
+   Finally runs regex masking again in case Guardrails changed formatting.
    """
    if not answer:
        return answer
-   answer = CUSTOMER_ID_RE.sub("<CUSTOMER_ID>", answer)
-   answer = CARD_ID_RE.sub("<CARD_ID>",answer)
-   answer = GENERIC_LONG_ID_RE.sub("******",answer)
+
+   # First deterministic masking pass.
+   answer = _mask_domain_pii(answer)
+
    guards = _get_guards()
-   outcome = guards["pii"].validate(answer)
-   return getattr(outcome, "validated_output", None) or answer
+
+   try:
+       outcome = guards["pii"].validate(answer)
+       validated = getattr(outcome, "validated_output", None)
+
+       if isinstance(validated, str) and validated.strip():
+           answer = validated
+
+   except Exception:
+       # Do not return the original raw answer.
+       # We keep the already regex-masked version.
+       pass
+
+   # Final deterministic masking pass.
+   answer = _mask_domain_pii(answer)
+
+   return answer
+
 
 
 

@@ -1122,15 +1122,6 @@ def build_rag_graph():
 rag_graph = build_rag_graph()
 
 
-# ── Static Public Entrypoint ──────────────────────────────────────────────────
-
-
-def run_search_agent_static(query: str) -> dict:
-    initial_state: RAGState = _initial_state(query)
-    final_state = rag_graph.invoke(initial_state)
-    return final_state["response"]
-
-
 # ── Async Public Entrypoint ───────────────────────────────────────────────────
 # This returns the final structured response as SSE.
 # It avoids streaming intermediate planner/tool model tokens.
