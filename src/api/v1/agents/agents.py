@@ -1,4 +1,3 @@
-
 import os
 import json
 import cohere
@@ -17,7 +16,38 @@ from src.core.db import get_sql_database
 load_dotenv()
 
 
+def normalize_chat_history(chat_history: list = None) -> list:
+    """
+    Normalizes chat history from Pydantic objects or dictionaries.
+
+    Expected output:
+    [
+        {"role": "user", "content": "..."},
+        {"role": "assistant", "content": "..."}
+    ]
+    """
+
+    chat_history = chat_history or []
+    normalized = []
+
+    for msg in chat_history:
+        role = getattr(msg, "role", None)
+        content = getattr(msg, "content", None)
+
+        if role is None and isinstance(msg, dict):
+            role = msg.get("role")
+
+        if content is None and isinstance(msg, dict):
+            content = msg.get("content")
+
+        if role in ["user", "assistant"] and content:
+            normalized.append({"role": role, "content": str(content)})
+
+    return normalized
+
+
 # ── Helper: build the OpenAI LLM ──────────────────────────────────────────────
+
 
 def _get_llm() -> ChatOpenAI:
     return ChatOpenAI(
@@ -27,10 +57,10 @@ def _get_llm() -> ChatOpenAI:
 
 
 # ── Helper: initial state ─────────────────────────────────────────────────────
-
-def _initial_state(query: str) -> RAGState:
+def _initial_state(query: str, chat_history: list = None) -> RAGState:
     return {
         "query": query,
+        "chat_history": chat_history or [],
         "retrieved_docs": [],
         "reranked_docs": [],
         "response": {},
@@ -47,6 +77,7 @@ def _initial_state(query: str) -> RAGState:
 
 # ── Pydantic Models ───────────────────────────────────────────────────────────
 
+
 class AnswerEvaluation(BaseModel):
     score: float
     reasoning: str
@@ -61,6 +92,7 @@ class QueryToolInput(BaseModel):
 
 
 # ── Node NL2SQL: Translate query to SQL → Execute → Summarise ─────────────────
+
 
 def nl2sql_node(state: RAGState) -> RAGState:
     llm = _get_llm()
@@ -184,8 +216,7 @@ Database schema:
 
     if isinstance(content, list):
         content = "".join(
-            p.get("text", "") if isinstance(p, dict) else str(p)
-            for p in content
+            p.get("text", "") if isinstance(p, dict) else str(p) for p in content
         )
 
     generated_sql = content.strip().strip("```").strip()
@@ -265,6 +296,7 @@ Query Results:
 
 # ── Node 2: Rerank ────────────────────────────────────────────────────────────
 
+
 def rerank_node(state: RAGState) -> RAGState:
     co = cohere.ClientV2(api_key=os.getenv("COHERE_API_KEY"))
     docs = state["retrieved_docs"]
@@ -292,6 +324,7 @@ def rerank_node(state: RAGState) -> RAGState:
 
 
 # ── Node 3: Generate Answer ───────────────────────────────────────────────────
+
 
 def generate_answer_node(state: RAGState) -> RAGState:
     llm = _get_llm()
@@ -374,6 +407,7 @@ Question:
 
 # ── Node 4: Evaluate Answer ───────────────────────────────────────────────────
 
+
 def evaluate_answer_node(state: RAGState) -> RAGState:
     llm = _get_llm()
     evaluator = llm.with_structured_output(AnswerEvaluation)
@@ -443,8 +477,9 @@ def evaluation_router(state: RAGState) -> str:
 
 # ── Tool 1: SQL Lookup ────────────────────────────────────────────────────────
 
+
 @tool("sql_lookup", args_schema=QueryToolInput)
-def sql_lookup(question: str) -> str:
+def sql_lookup(question: str, chat_history: list = None) -> str:
     """
     Use this tool for customer-specific, card-specific, account-specific,
     transaction-specific, billing-specific, reward-specific, or computed SQL answers.
@@ -452,7 +487,10 @@ def sql_lookup(question: str) -> str:
 
     print("[sql_lookup] Tool called.")
 
-    tool_state = _initial_state(question)
+    effective_chat_history = normalize_chat_history(chat_history)
+
+    tool_state = _initial_state(query=question, chat_history=effective_chat_history)
+
     result_state = nl2sql_node(tool_state)
 
     return json.dumps(
@@ -467,9 +505,8 @@ def sql_lookup(question: str) -> str:
 
 
 # ── Tool 2: Document Lookup ───────────────────────────────────────────────────
-
 @tool("document_lookup", args_schema=QueryToolInput)
-def document_lookup(question: str) -> str:
+def document_lookup(question: str, chat_history: list = None) -> str:
     """
     Use this tool for product guide, policy, rules, fees, rewards,
     billing logic, spend summary rules, card features, edge cases,
@@ -478,7 +515,10 @@ def document_lookup(question: str) -> str:
 
     print("[document_lookup] Tool called.")
 
-    tool_state = _initial_state(question)
+    effective_chat_history = normalize_chat_history(chat_history)
+
+    tool_state = _initial_state(query=question, chat_history=effective_chat_history)
+
     max_retries = 3
 
     for _ in range(max_retries):
@@ -510,14 +550,167 @@ def document_lookup(question: str) -> str:
 # This replaces the old static router_node.
 # The LLM can call sql_lookup, document_lookup, or both.
 
+
+def build_conversation_context(chat_history: list = None) -> str:
+    """
+    Converts chat_history into readable conversation text for the LLM.
+
+    Input format:
+    [
+        {"role": "user", "content": "..."},
+        {"role": "assistant", "content": "..."}
+    ]
+
+    Output format:
+    User: ...
+    Assistant: ...
+    """
+
+    chat_history = chat_history or []
+    conversation_context_parts = []
+
+    for msg in chat_history:
+        if isinstance(msg, dict):
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+        else:
+            role = getattr(msg, "role", "")
+            content = getattr(msg, "content", "")
+
+        if not content:
+            continue
+
+        if role == "user":
+            conversation_context_parts.append(f"User: {content}")
+        elif role == "assistant":
+            conversation_context_parts.append(f"Assistant: {content}")
+
+    if not conversation_context_parts:
+        return "No previous conversation."
+
+    return "\n".join(conversation_context_parts)
+
+
+
+def rewrite_followup_question(state: RAGState) -> str:
+    """
+    Rewrites follow-up questions into standalone questions using chat history.
+
+    Example:
+    Previous answer: Robert Clarke, Customer ID C-1003 has highest credit limit.
+    Current query: what is his available limit as of now?
+    Rewritten query: What is the available credit limit for Robert Clarke, Customer ID C-1003, as of now?
+    """
+
+    llm = _get_llm()
+
+    query = state["query"]
+    chat_history = state.get("chat_history", []) or []
+    conversation_context = build_conversation_context(chat_history)
+
+    if not chat_history:
+        return query
+
+    rewrite_prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """You rewrite follow-up user questions into standalone questions.
+
+Rules:
+- Use previous conversation to resolve pronouns and references.
+- Resolve words like his, her, it, that, this, same, above, previous, that customer, that card, that category.
+- Preserve important identifiers such as customer_id, card_id, account_id, customer name, merchant, month, category, and date.
+- Do not answer the question.
+- Only return the rewritten standalone question.
+- If the question is already standalone, return it unchanged.
+
+Examples:
+Previous conversation:
+User: Which customer has the highest credit limit?
+Assistant: The customer with the highest credit limit is Robert Clarke (Customer ID: C-1003).
+
+Current question:
+What is his available limit as of now?
+
+Standalone question:
+What is the available credit limit for Robert Clarke, Customer ID C-1003, as of now?"""
+            ),
+            (
+                "human",
+                """Previous conversation:
+{conversation_context}
+
+Current question:
+{query}
+
+Standalone question:"""
+            ),
+        ]
+    )
+
+    chain = rewrite_prompt | llm
+
+    rewritten = chain.invoke(
+        {
+            "conversation_context": conversation_context,
+            "query": query,
+        }
+    )
+
+    rewritten_text = getattr(rewritten, "content", str(rewritten)).strip()
+
+    print(f"[rewrite_followup_question] Original query: {query}")
+    print(f"[rewrite_followup_question] Rewritten query: {rewritten_text}")
+
+    return rewritten_text or query
+
+
+
 def dynamic_tool_agent_node(state: RAGState) -> RAGState:
     llm = _get_llm()
+
+    chat_history = state.get("chat_history", []) or []
+    conversation_context = build_conversation_context(chat_history)
+    contextual_query = rewrite_followup_question(state)
+
+    print(f"[dynamic_tool_agent_node] Original query: {state['query']}")
+    print(f"[dynamic_tool_agent_node] Contextual query: {contextual_query}")
 
     tools = [sql_lookup, document_lookup]
     tool_map = {t.name: t for t in tools}
 
     llm_with_tools = llm.bind_tools(tools)
 
+    # ---------------------------------------------------------------------
+    # Build conversation context from chat_history
+    # ---------------------------------------------------------------------
+    chat_history = state.get("chat_history", []) or []
+
+    conversation_context_parts = []
+
+    for msg in chat_history:
+        role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", "")
+        content = (
+            msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
+        )
+
+        if not content:
+            continue
+
+        if role == "user":
+            conversation_context_parts.append(f"User: {content}")
+        elif role == "assistant":
+            conversation_context_parts.append(f"Assistant: {content}")
+
+    conversation_context = "\n".join(conversation_context_parts)
+
+    if not conversation_context:
+        conversation_context = "No previous conversation."
+
+    # ---------------------------------------------------------------------
+    # Planner prompt with chat history
+    # ---------------------------------------------------------------------
     planner_prompt = ChatPromptTemplate.from_messages(
         [
             (
@@ -535,6 +728,11 @@ Use sql_lookup when the user asks for actual data from the PostgreSQL database, 
 - transactions
 - billing statements
 - outstanding amount
+- available credit limit
+- current available limit
+- remaining limit
+- usable limit
+- credit limit minus outstanding balance
 - minimum due
 - due date
 - reward balance
@@ -571,32 +769,64 @@ Important routing behavior:
 - Prefer calling both tools when a complete answer requires both customer/account data and product-guide rules.
 - Do not answer directly if a tool can answer the question.
 
+Conversation memory rules:
+- Use the previous conversation to understand follow-up questions.
+- Resolve references like "it", "that", "this", "same", "above", "those", "that card", "that customer", "that category", "that merchant", and "previous month".
+- If the current question is a follow-up, rewrite it mentally using the previous conversation before selecting tools.
+- If the user asks for actual available limit, current limit, remaining limit, outstanding amount, or customer/card-specific values, always use sql_lookup.
+- Do not use document_lookup alone for these questions.
+- Pass the relevant standalone question to the selected tool.
+- Do not deviate from the active conversation topic.
+
 Examples:
 - "What is the spend for card CC-881001 in March 2026?" -> sql_lookup only.
 - "What is the forex markup rule?" -> document_lookup only.
+- "what is his available limit" -> sql_lookup because his refers to previous customer in the conversation.
 - "Is card CC-881001 eligible for annual fee waiver and explain the rule?" -> sql_lookup and document_lookup.
-- "How many reward points did Sarah earn and what is the redemption value?" -> sql_lookup and document_lookup if redemption value is in the document.""",
+- "How many reward points did Sarah earn and what is the redemption value?" -> sql_lookup and document_lookup if redemption value is in the document.
+- Previous: "What is my highest spend category?" Current: "Which merchants contributed to it?" -> sql_lookup because "it" refers to the previous category.""",
             ),
-            (
-                "human",
-                "User question: {query}",
-            ),
+            
+        (
+            "human",
+            """Previous conversation:
+        {conversation_context}
+
+        Original user question:
+        {original_query}
+
+        Standalone resolved question:
+        {query}
+
+        Use the standalone resolved question for tool selection and tool arguments."""
+        ),
         ]
     )
 
     planner_chain = planner_prompt | llm_with_tools
-    planner_response = planner_chain.invoke({"query": state["query"]})
+    
+    planner_response = planner_chain.invoke(
+        {
+            "query": contextual_query,
+            "original_query": state["query"],
+            "conversation_context": conversation_context,
+        }
+    )
+
 
     tool_calls = getattr(planner_response, "tool_calls", []) or []
 
     tool_results = []
 
     if not tool_calls:
-        print("[dynamic_tool_agent_node] No tool call produced. Falling back to document_lookup.")
+        print(
+            "[dynamic_tool_agent_node] No tool call produced. Falling back to document_lookup."
+        )
 
         fallback_result = document_lookup.invoke(
             {
-                "question": state["query"],
+                "question": contextual_query,
+                "chat_history": chat_history,
             }
         )
 
@@ -619,7 +849,7 @@ Examples:
                 continue
 
             if isinstance(tool_args, dict):
-                question = tool_args.get("question", state["query"])
+                question = tool_args.get("question", contextual_query)
             else:
                 question = state["query"]
 
@@ -628,6 +858,7 @@ Examples:
             result = tool_map[tool_name].invoke(
                 {
                     "question": question,
+                    "chat_history": chat_history,
                 }
             )
 
@@ -640,18 +871,28 @@ Examples:
 
     structured_llm = llm.with_structured_output(AIResponse)
 
+    # ---------------------------------------------------------------------
+    # Final synthesis prompt with chat history
+    # ---------------------------------------------------------------------
     synthesis_prompt = ChatPromptTemplate.from_messages(
         [
             (
                 "system",
                 """You are the final answer synthesizer for the NorthStar Bank Credit Card Spend Summarizer project.
 
-You are given outputs from one or more tools:
+You are given:
+- The previous conversation
+- The current user question
+- Outputs from one or more tools
+
+Tool output meanings:
 - sql_lookup may contain actual database results and generated SQL.
 - document_lookup may contain policy/product-guide answers and citations.
 
 Rules:
-- Answer the user's original question clearly and concisely.
+- Answer the user's current question clearly and concisely.
+- Use the previous conversation to resolve follow-up references.
+- If the user says "it", "that", "this", "same", "above", "those", or similar, infer the reference from the previous conversation.
 - If SQL data is available, use it as the source of truth for actual customer/card/account/transaction values.
 - If document context is available, use it as the source of truth for policy, rule, product-guide, fee, reward, and billing explanations.
 - If both tools were used, combine them into one complete answer.
@@ -659,11 +900,15 @@ Rules:
 - Preserve document citations when provided by document_lookup.
 - For SQL-only answers, set policy_citations to "N/A", page_no to "N/A", and document_name to "credit_card_summary_seed_data_db".
 - For mixed SQL + document answers, include document citations from document_lookup and mention SQL was used for customer/account facts.
-- If a tool returned an error, explain the limitation clearly without fabricating an answer.""",
+- If a tool returned an error, explain the limitation clearly without fabricating an answer.
+- Do not deviate from the active conversation topic.""",
             ),
             (
                 "human",
-                """Original user question:
+                """Previous conversation:
+{conversation_context}
+
+Current user question:
 {query}
 
 Tool outputs:
@@ -677,6 +922,7 @@ Tool outputs:
     final_answer = final_chain.invoke(
         {
             "query": state["query"],
+            "conversation_context": conversation_context,
             "tool_outputs": json.dumps(tool_results, default=str),
         }
     )
@@ -701,7 +947,9 @@ Tool outputs:
                     sql_results.append(sql_result)
 
             except Exception as exc:
-                print(f"[dynamic_tool_agent_node] Could not parse SQL tool result: {exc}")
+                print(
+                    f"[dynamic_tool_agent_node] Could not parse SQL tool result: {exc}"
+                )
 
     if sql_queries:
         response["sql_query_executed"] = "\n\n".join(sql_queries)
@@ -726,6 +974,7 @@ Tool outputs:
 # - document_lookup
 # - both
 
+
 def build_rag_graph():
     graph = StateGraph(RAGState)
 
@@ -737,14 +986,13 @@ def build_rag_graph():
     compiled_agent = graph.compile()
 
     os.makedirs("references", exist_ok=True)
-    
+
     try:
         mermaid_code = compiled_agent.get_graph().draw_mermaid()
         with open("rag_graph.mmd", "w", encoding="utf-8") as f:
             f.write(mermaid_code)
     except Exception as e:
         print(f"Graph generation skipped: {e}")
-
 
     return compiled_agent
 
@@ -754,6 +1002,7 @@ rag_graph = build_rag_graph()
 
 
 # ── Static Public Entrypoint ──────────────────────────────────────────────────
+
 
 def run_search_agent_static(query: str) -> dict:
     initial_state: RAGState = _initial_state(query)
@@ -766,8 +1015,32 @@ def run_search_agent_static(query: str) -> dict:
 # It avoids streaming intermediate planner/tool model tokens.
 
 
-async def run_search_agent(query: str):
-    initial_state: RAGState = _initial_state(query)
+async def run_search_agent(query: str, chat_history: list = None):
+    """
+    Runs the RAG graph with current query + previous chat history.
+
+    chat_history expected format:
+    [
+        {"role": "user", "content": "..."},
+        {"role": "assistant", "content": "..."}
+    ]
+    """
+
+    chat_history = chat_history or []
+
+    # Normalize chat_history because it may contain Pydantic objects or dicts
+    normalized_chat_history = []
+
+    for msg in chat_history:
+        role = getattr(msg, "role", None) or msg.get("role")
+        content = getattr(msg, "content", None) or msg.get("content")
+
+        if role in ["user", "assistant"] and content:
+            normalized_chat_history.append({"role": role, "content": content})
+
+    initial_state: RAGState = _initial_state(
+        query=query, chat_history=normalized_chat_history
+    )
 
     try:
         final_state = await rag_graph.ainvoke(initial_state)
@@ -787,4 +1060,3 @@ async def run_search_agent(query: str):
 
         yield f"data: {json.dumps(error_payload, default=str)}\n\n"
         yield "data: [DONE]\n\n"
-

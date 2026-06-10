@@ -537,16 +537,70 @@ def extract_actual_answer(raw_response: str) -> str:
     return text.strip()
 
 
-def query_backend_stream(query: str):
+def build_chat_history(max_messages: int = 10) -> list:
+    """
+    Builds recent conversation history for contextual follow-up questions.
+
+    Streamlit UI roles:
+    - "user" becomes "user"
+    - "bot" becomes "assistant"
+
+    The current user question should NOT be included here.
+    So call this function BEFORE appending the latest user input.
+    """
+
+    history = []
+
+    recent_messages = st.session_state.messages[-max_messages:]
+
+    for msg in recent_messages:
+        role = msg.get("role", "")
+        content = str(msg.get("content", "")).strip()
+
+        if not content:
+            continue
+
+        # Skip initial welcome message because it is not useful as conversation context
+        if role == "bot" and content.startswith("Hello! 👋 I'm ready"):
+            continue
+
+        if role == "user":
+            history.append({
+                "role": "user",
+                "content": content
+            })
+
+        elif role == "bot":
+            history.append({
+                "role": "assistant",
+                "content": content
+            })
+
+    return history
+
+
+
+def query_backend_stream(query: str, chat_history: list = None):
     """
     Calls FastAPI streaming query endpoint and returns the accumulated answer.
 
     Backend route expected:
     POST /multimodelrag/query/stream
-    JSON body: {"query": "..."}
+
+    JSON body sent:
+    {
+        "query": "current user question",
+        "chat_history": [
+            {"role": "user", "content": "previous question"},
+            {"role": "assistant", "content": "previous answer"}
+        ]
+    }
     """
     try:
-        payload = {"query": query}
+        payload = {
+            "query": query,
+            "chat_history": chat_history or []
+        }
 
         with requests.post(
             QUERY_STREAM_ENDPOINT,
@@ -558,11 +612,13 @@ def query_backend_stream(query: str):
             response.raise_for_status()
 
             full_answer_parts = []
+
             for line in response.iter_lines(decode_unicode=True):
                 if not line:
                     continue
 
                 chunk = line.strip()
+
                 if chunk.startswith("data:"):
                     chunk = chunk.replace("data:", "", 1).strip()
 
@@ -571,25 +627,28 @@ def query_backend_stream(query: str):
 
                 full_answer_parts.append(chunk)
 
-                full_answer = "".join(full_answer_parts).strip()
+            full_answer = "".join(full_answer_parts).strip()
 
-                if not full_answer:
-                    full_answer = "I could not generate a response from the backend."
+            if not full_answer:
+                full_answer = "I could not generate a response from the backend."
 
-                actual_answer = extract_actual_answer(full_answer)
+            actual_answer = extract_actual_answer(full_answer)
 
-                return True, actual_answer
+            return True, actual_answer
 
     except requests.exceptions.Timeout:
         return False, "Query request timed out. Please try again."
+
     except requests.exceptions.ConnectionError:
         return (
             False,
             f"Could not connect to backend at {API_BASE_URL}. Please verify FastAPI is running.",
         )
+
     except requests.exceptions.HTTPError as e:
         error_text = e.response.text if e.response is not None else str(e)
         return False, f"Backend returned HTTP error: {error_text}"
+
     except requests.exceptions.RequestException as e:
         return False, f"Backend query failed: {str(e)}"
 
@@ -771,15 +830,24 @@ if st.session_state.file_uploaded and st.session_state.file_ingested:
         )
 
         render_chat_window()
+        
         user_input = st.chat_input("Ask something about your spend…")
 
         if user_input:
+            # Important:
+            # Capture previous conversation BEFORE appending the current user question.
+            previous_chat_history = build_chat_history(max_messages=10)
+
+            # Now add the current user message to the UI session state.
             st.session_state.messages.append(
                 {"role": "user", "content": user_input, "time": _now()}
             )
 
             with st.spinner("Bot is analyzing your spend data..."):
-                success, answer = query_backend_stream(user_input)
+                success, answer = query_backend_stream(
+                    query=user_input,
+                    chat_history=previous_chat_history
+                )
 
             if success:
                 st.session_state.last_query_error = None
@@ -791,7 +859,9 @@ if st.session_state.file_uploaded and st.session_state.file_ingested:
             st.session_state.messages.append(
                 {"role": "bot", "content": bot_answer, "time": _now()}
             )
+
             st.rerun()
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────

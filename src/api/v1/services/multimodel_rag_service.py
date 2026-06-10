@@ -50,5 +50,7 @@ def query_documents_static(query: str):
     return run_search_agent_static(query)
 
 
-async def query_documents(query: str):
-    return run_search_agent(query)
+
+async def query_documents(query: str, chat_history: list = None):
+    chat_history = chat_history or []
+    return run_search_agent(query, chat_history)

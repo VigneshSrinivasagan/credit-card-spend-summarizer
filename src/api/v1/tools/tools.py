@@ -9,6 +9,7 @@ from src.core.db import similarity_search
 # Each node reads from state and returns updated state.
 class RAGState(TypedDict):
     query: str
+    chat_history: list
     retrieved_docs: List[Document]  # Output of Node 1 — wide retrieval (k=20)
     reranked_docs: List[Document]  # Output of Node 2 — narrowed by reranker (top_n=10)
     response: dict  # Output of Node 3 — final structured answer

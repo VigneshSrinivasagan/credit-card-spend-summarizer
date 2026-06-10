@@ -21,5 +21,15 @@ def query_endpoint_static(request: QueryRequest):
 @router.post("/query/stream")
 async def query_endpoint(request: QueryRequest):
     print("Inside the query route...")
-    answer = await query_documents(request.query)
-    return StreamingResponse(answer, media_type="text/event-stream")
+    print(f"Query: {request.query}")
+    print(f"Chat history count: {len(request.chat_history or [])}")
+
+    answer = await query_documents(
+        query=request.query,
+        chat_history=request.chat_history or []
+    )
+
+    return StreamingResponse(
+        answer,
+        media_type="text/event-stream"
+    )
