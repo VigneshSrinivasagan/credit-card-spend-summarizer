@@ -628,7 +628,7 @@ def query_backend_stream(query: str, chat_history: list = None):
                 full_answer_parts.append(chunk)
 
             full_answer = "".join(full_answer_parts).strip()
-
+            print(f"full answer ---------------- {full_answer}")
             if not full_answer:
                 full_answer = "I could not generate a response from the backend."
 

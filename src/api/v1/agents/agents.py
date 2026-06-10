@@ -16,6 +16,41 @@ from src.core.db import get_sql_database
 load_dotenv()
 
 
+from langchain_core.runnables import RunnableConfig
+from datetime import datetime, timezone
+
+
+def _langsmith_config(
+    run_name: str,
+    metadata: dict | None = None,
+    tags: list[str] | None = None,
+) -> RunnableConfig:
+    """
+    Builds LangSmith tracing config for LangChain runnable calls.
+
+    Important:
+    - metadata is visible in LangSmith traces.
+    - metadata is NOT sent to the LLM as prompt content.
+    """
+
+    base_metadata = {
+        "app": "northstar-credit-card-spend-summarizer",
+        "module": "agent.py",
+        "environment": os.getenv("APP_ENV", "local"),
+        "openai_model": os.getenv("OPENAI_CHAT_MODEL"),
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+    }
+
+    if metadata:
+        base_metadata.update(metadata)
+
+    return {
+        "run_name": run_name,
+        "tags": tags or ["northstar", "rag", "credit-card"],
+        "metadata": base_metadata,
+    }
+
+
 def normalize_chat_history(chat_history: list = None) -> list:
     """
     Normalizes chat history from Pydantic objects or dictionaries.
@@ -209,7 +244,24 @@ Database schema:
         {
             "schema": schema_info,
             "question": state["query"],
-        }
+        },
+        config=_langsmith_config(
+            run_name="nl2sql_generate_sql",
+            metadata={
+                "node": "nl2sql_node",
+                "step": "generate_sql",
+                "route": "sql_lookup",
+                "query_type": "customer_database_query",
+                "has_chat_history": bool(state.get("chat_history")),
+                "chat_history_count": len(state.get("chat_history", [])),
+            },
+            tags=[
+                "northstar",
+                "nl2sql",
+                "sql-generation",
+                "sql_lookup",
+            ],
+        ),
     )
 
     content = raw_sql.content
@@ -275,7 +327,18 @@ Query Results:
             "query": state["query"],
             "sql": generated_sql,
             "result": sql_result,
-        }
+        },
+        config=_langsmith_config(
+            run_name="nl2sql_summarize_result",
+            metadata={
+                "node": "nl2sql_node",
+                "step": "summarize_sql_result",
+                "query": state["query"],
+                "generated_sql": generated_sql,
+                "route": "sql_lookup",
+            },
+            tags=["northstar", "nl2sql", "sql-answer"],
+        ),
     )
 
     print("[nl2sql_node] Answer generated.")
@@ -394,7 +457,27 @@ Question:
         {
             "context": context,
             "query": state["query"],
-        }
+        },
+        config=_langsmith_config(
+            run_name="document_generate_answer",
+            metadata={
+                "node": "generate_answer_node",
+                "step": "generate_document_answer",
+                "route": "document_lookup",
+                "retrieved_doc_count": len(state.get("retrieved_docs", [])),
+                "reranked_doc_count": len(state.get("reranked_docs", [])),
+                "has_context": bool(context.strip()),
+                "context_char_count": len(context),
+                "has_chat_history": bool(state.get("chat_history")),
+                "chat_history_count": len(state.get("chat_history", [])),
+            },
+            tags=[
+                "northstar",
+                "rag",
+                "document-answer",
+                "document_lookup",
+            ],
+        ),
     )
 
     print("[generate_answer_node] Answer generated.")
@@ -445,7 +528,17 @@ Generated Answer:
         {
             "question": state["query"],
             "answer": state["response"].get("answer", ""),
-        }
+        },
+        config=_langsmith_config(
+            run_name="evaluate_answer_quality",
+            metadata={
+                "node": "evaluate_answer_node",
+                "step": "answer_evaluation",
+                "query": state["query"],
+                "retry_count": state.get("retry_count", 0),
+            },
+            tags=["northstar", "evaluation", "answer-quality"],
+        ),
     )
 
     print(
@@ -591,7 +684,6 @@ def build_conversation_context(chat_history: list = None) -> str:
     return "\n".join(conversation_context_parts)
 
 
-
 def rewrite_followup_question(state: RAGState) -> str:
     """
     Rewrites follow-up questions into standalone questions using chat history.
@@ -634,7 +726,7 @@ Current question:
 What is his available limit as of now?
 
 Standalone question:
-What is the available credit limit for Robert Clarke, Customer ID C-1003, as of now?"""
+What is the available credit limit for Robert Clarke, Customer ID C-1003, as of now?""",
             ),
             (
                 "human",
@@ -644,7 +736,7 @@ What is the available credit limit for Robert Clarke, Customer ID C-1003, as of 
 Current question:
 {query}
 
-Standalone question:"""
+Standalone question:""",
             ),
         ]
     )
@@ -655,7 +747,17 @@ Standalone question:"""
         {
             "conversation_context": conversation_context,
             "query": query,
-        }
+        },
+        config=_langsmith_config(
+            run_name="rewrite_followup_question",
+            metadata={
+                "node": "rewrite_followup_question",
+                "step": "query_rewrite",
+                "original_query": query,
+                "has_chat_history": bool(chat_history),
+            },
+            tags=["northstar", "query-rewrite", "conversation-memory"],
+        ),
     )
 
     rewritten_text = getattr(rewritten, "content", str(rewritten)).strip()
@@ -664,7 +766,6 @@ Standalone question:"""
     print(f"[rewrite_followup_question] Rewritten query: {rewritten_text}")
 
     return rewritten_text or query
-
 
 
 def dynamic_tool_agent_node(state: RAGState) -> RAGState:
@@ -786,10 +887,9 @@ Examples:
 - "How many reward points did Sarah earn and what is the redemption value?" -> sql_lookup and document_lookup if redemption value is in the document.
 - Previous: "What is my highest spend category?" Current: "Which merchants contributed to it?" -> sql_lookup because "it" refers to the previous category.""",
             ),
-            
-        (
-            "human",
-            """Previous conversation:
+            (
+                "human",
+                """Previous conversation:
         {conversation_context}
 
         Original user question:
@@ -798,21 +898,31 @@ Examples:
         Standalone resolved question:
         {query}
 
-        Use the standalone resolved question for tool selection and tool arguments."""
-        ),
+        Use the standalone resolved question for tool selection and tool arguments.""",
+            ),
         ]
     )
 
     planner_chain = planner_prompt | llm_with_tools
-    
+
     planner_response = planner_chain.invoke(
         {
             "query": contextual_query,
             "original_query": state["query"],
             "conversation_context": conversation_context,
-        }
+        },
+        config=_langsmith_config(
+            run_name="dynamic_tool_planner",
+            metadata={
+                "node": "dynamic_tool_agent_node",
+                "step": "tool_planning",
+                "original_query": state["query"],
+                "contextual_query": contextual_query,
+                "has_chat_history": bool(chat_history),
+            },
+            tags=["northstar", "tool-router", "planner"],
+        ),
     )
-
 
     tool_calls = getattr(planner_response, "tool_calls", []) or []
 
@@ -924,7 +1034,18 @@ Tool outputs:
             "query": state["query"],
             "conversation_context": conversation_context,
             "tool_outputs": json.dumps(tool_results, default=str),
-        }
+        },
+        config=_langsmith_config(
+            run_name="final_answer_synthesis",
+            metadata={
+                "node": "dynamic_tool_agent_node",
+                "step": "final_synthesis",
+                "query": state["query"],
+                "tools_used": [item.get("tool") for item in tool_results],
+                "tool_count": len(tool_results),
+            },
+            tags=["northstar", "final-answer", "synthesis"],
+        ),
     )
 
     response = final_answer.model_dump()

@@ -3,6 +3,7 @@ from fastapi import UploadFile, HTTPException
 from starlette.concurrency import run_in_threadpool
 
 from src.ingestion.ingestion import ingest_pdf
+from src.core.guardrails import guard_input, guard_output
 from src.api.v1.agents.agents import run_search_agent, run_search_agent_static
 
 import os
@@ -53,4 +54,9 @@ def query_documents_static(query: str):
 
 async def query_documents(query: str, chat_history: list = None):
     chat_history = chat_history or []
-    return run_search_agent(query, chat_history)
+    guard_input(query)
+    result = run_search_agent(query, chat_history)
+    print(result)
+    if isinstance(result, dict) and result.get("answer"):
+        result["answer"] = guard_output(result["answer"])
+    return result
