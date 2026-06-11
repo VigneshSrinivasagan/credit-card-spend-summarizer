@@ -1,0 +1,93 @@
+flowchart TB
+    subgraph Client["Frontend — src/ui/streamlit/app.py (localhost:8501)"]
+        UI["Streamlit UI<br/>Chat + File Upload<br/>WhatsApp-style chat window"]
+    end
+
+    subgraph API["FastAPI Backend — main.py (localhost:8000)"]
+        direction TB
+        subgraph Router["Router — src/api/v1/routes/multimodel_rag_route.py"]
+            UR["POST /api/v1/multimodelrag<br/>/embed/multimodel/document"]
+            QR["POST /api/v1/multimodelrag<br/>/query/stream  (SSE)"]
+        end
+
+        subgraph Service["Service — src/api/v1/services/multimodel_rag_service.py"]
+            US["add_document()<br/>validate + save PDF"]
+            QS["query_documents()<br/>collect SSE chunks"]
+        end
+
+        subgraph Guards["Guardrails — src/core/guardrails.py"]
+            GI["guard_input()<br/>ToxicLanguage validator"]
+            GO["guard_output()<br/>PII redaction<br/>+ domain ID masking"]
+        end
+
+        subgraph Ingestion["Ingestion — src/ingestion/"]
+            ING["ingest_pdf()<br/>ingestion.py"]
+            PARSE["parse_document()<br/>docling_parser.py<br/>(text / table / image chunks)"]
+            SPLIT["_split_text()<br/>1500 char chunks<br/>300 char overlap"]
+        end
+
+        subgraph AgentGraph["LangGraph Agent — src/api/v1/agents/agents.py"]
+            REWRITE["rewrite_followup_question()<br/>query rewriter"]
+            DTA["dynamic_tool_agent_node()<br/>LLM tool planner<br/>(sql_lookup | document_lookup | both)"]
+            SYNTH["Final Answer Synthesizer<br/>structured AIResponse"]
+        end
+
+        subgraph Tools["Tools — src/api/v1/agents/agents.py + tools/tools.py"]
+            direction LR
+            TL_SQL["sql_lookup tool<br/>nl2sql_node()<br/>Generate SQL → Execute → Summarise"]
+            TL_DOC["document_lookup tool<br/>vector_search_node()<br/>→ rerank_node()<br/>→ generate_answer_node()<br/>→ evaluate_answer_node()<br/>(retry ≤3)"]
+        end
+
+        subgraph DBLayer["DB Layer — src/core/db.py"]
+            SS["similarity_search()<br/>OpenAI embed query<br/>+ pgvector ANN"]
+            SC["store_chunks()<br/>embed + INSERT<br/>multimodal_chunks"]
+            SQLDB["get_sql_database()<br/>LangChain SQLDatabase<br/>read-only role"]
+        end
+    end
+
+    subgraph Ext["External Services"]
+        PG[("PostgreSQL + pgvector<br/>multimodal_chunks<br/>documents<br/>customers / credit_cards<br/>card_transactions<br/>reward_transactions<br/>billing_statements")]
+        OAI["OpenAI<br/>Chat: gpt-5.4 <br/>Embeddings: text-embedding-3-small"]
+        COH["Cohere<br/>rerank-english-v3.0<br/>(reranker)"]
+        LS["LangSmith<br/>(tracing + eval)"]
+        GRD["Guardrails AI Hub<br/>GuardrailsPII<br/>ToxicLanguage"]
+    end
+
+    %% UI → Backend
+    UI -- "HTTP POST (requests)<br/>multipart/form-data" --> UR
+    UI -- "HTTP POST (requests)<br/>JSON + SSE stream" --> QR
+
+    %% Upload path
+    UR --> US --> ING --> PARSE --> SPLIT --> SC
+
+    %% Query path
+    QR --> QS
+    QS --> GI
+    GI -. "raises GuardrailViolation<br/>HTTP 400" .-> QR
+    QS --> DTA
+    DTA --> REWRITE
+    REWRITE -. "LLM call" .-> OAI
+    DTA -- "tool call" --> TL_SQL
+    DTA -- "tool call" --> TL_DOC
+    DTA --> SYNTH
+    SYNTH -. "LLM call" .-> OAI
+    QS --> GO
+    GO -. "PII / toxicity" .-> GRD
+
+    %% SQL path
+    TL_SQL --> SQLDB --> PG
+    TL_SQL -. "NL→SQL + summarise<br/>LLM calls" .-> OAI
+
+    %% Document path
+    TL_DOC --> SS --> PG
+    TL_DOC -. "rerank" .-> COH
+    TL_DOC -. "generate + evaluate<br/>LLM calls" .-> OAI
+
+    %% DB writes (ingestion)
+    SC -- "OpenAI embed_documents()" --> OAI
+    SC -- "INSERT multimodal_chunks<br/>embedding ::vector" --> PG
+
+    %% LangSmith tracing
+    DTA -. "RunnableConfig tracing" .-> LS
+    TL_SQL -. "tracing" .-> LS
+    TL_DOC -. "tracing" .-> LS
