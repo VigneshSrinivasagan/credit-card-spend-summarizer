@@ -1169,7 +1169,7 @@ async def run_search_agent(query: str, chat_history: list = None):
     )
 
     try:
-        final_state = await rag_graph.ainvoke(initial_state)
+        final_state = await rag_graph.ainvoke(initial_state, config=_langsmith_config("rag_graph_root", tags=["northstar","user-001","rag"]))
 
         response_payload = final_state.get("response", {})
 
