@@ -56,8 +56,8 @@ def apply_output_guard(value):
     - tuple
 
     Example:
-        (True, "Robert Clarke") 
-        becomes 
+        (True, "Robert Clarke")
+        becomes
         (True, "<PERSON>")
     """
 
@@ -65,22 +65,13 @@ def apply_output_guard(value):
         return guard_output(value)
 
     if isinstance(value, dict):
-        return {
-            key: apply_output_guard(item)
-            for key, item in value.items()
-        }
+        return {key: apply_output_guard(item) for key, item in value.items()}
 
     if isinstance(value, list):
-        return [
-            apply_output_guard(item)
-            for item in value
-        ]
+        return [apply_output_guard(item) for item in value]
 
     if isinstance(value, tuple):
-        return tuple(
-            apply_output_guard(item)
-            for item in value
-        )
+        return tuple(apply_output_guard(item) for item in value)
 
     return value
 
@@ -108,7 +99,10 @@ def apply_output_guard(value):
 
 async def query_documents(query: str, chat_history: list = None):
     chat_history = chat_history or []
-    guard_input(query)
+    try:
+        guard_input(query)
+    except Exception as e:
+        return {"answer": "I understand this can be frustrating. Let me help resolve this for you."}    
 
     # Collect streamed chunks from the async generator
     collected_payload = None

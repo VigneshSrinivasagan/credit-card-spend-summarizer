@@ -252,6 +252,7 @@ def store_chunks(chunks: list[dict], doc_id: str) -> int:
 
     return rows_inserted
 
+
 # ---------------------------------------------------------------------------
 # Vector similarity search
 #
@@ -267,6 +268,7 @@ def store_chunks(chunks: list[dict], doc_id: str) -> int:
 #   ORDER BY embedding <=> query_vector directly on multimodal_chunks,
 #   which uses the HNSW index defined in schema.sql.
 # ---------------------------------------------------------------------------
+
 
 def similarity_search(query: str, k: int = 20) -> list[Document]:
     """Find the k most semantically similar chunks to the query.
@@ -300,22 +302,26 @@ def similarity_search(query: str, k: int = 20) -> list[Document]:
 
     docs = []
     for row in rows:
-        docs.append(Document(
-            page_content=row["content"],
-            metadata={
-                "source_file":  row["source_file"],
-                "page_number":  row["page_number"],
-                "chunk_type":   row["chunk_type"],
-                "element_type": row["element_type"],
-                "section":      row["section"],
-                "image_path":   row["image_path"],
-                "similarity":   row["similarity"],
-            }
-        ))
+        docs.append(
+            Document(
+                page_content=row["content"],
+                metadata={
+                    "source_file": row["source_file"],
+                    "page_number": row["page_number"],
+                    "chunk_type": row["chunk_type"],
+                    "element_type": row["element_type"],
+                    "section": row["section"],
+                    "image_path": row["image_path"],
+                    "similarity": row["similarity"],
+                },
+            )
+        )
 
     if docs:
-        print(f"[similarity_search] Returned {len(docs)} chunks "
-              f"(top similarity: {docs[0].metadata['similarity']:.4f})")
+        print(
+            f"[similarity_search] Returned {len(docs)} chunks "
+            f"(top similarity: {docs[0].metadata['similarity']:.4f})"
+        )
     else:
         print("[similarity_search] No chunks returned")
 
@@ -333,6 +339,12 @@ def get_sql_database() -> SQLDatabase:
         raise ValueError("PG_CONNECTION_STRING_RDBMS is not set. Check your .env file.")
     return SQLDatabase.from_uri(
         db_url,
-        include_tables=["customers", "credit_cards", "card_transactions", "reward_transactions","billing_statements"],
+        include_tables=[
+            "customers",
+            "credit_cards",
+            "card_transactions",
+            "reward_transactions",
+            "billing_statements",
+        ],
         sample_rows_in_table_info=2,
     )

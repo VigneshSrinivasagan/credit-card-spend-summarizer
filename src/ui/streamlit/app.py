@@ -358,31 +358,6 @@ def render_ingestion_error(message: str):
     )
 
 
-def generate_mock_history() -> list:
-    """Placeholder history function. Replace with backend history endpoint when available."""
-    pairs = [
-        (
-            "What are my top spending categories this month?",
-            "Your top 3 categories are: 🍔 Food & Dining, 🛒 Groceries, and ✈️ Travel.",
-        ),
-        (
-            "How much did I spend in total last month?",
-            "Your total spend last month was calculated from the uploaded statement.",
-        ),
-        (
-            "Which merchant did I spend the most on?",
-            "I can identify the highest-spend merchant from your uploaded transactions.",
-        ),
-    ]
-
-    history = []
-    for question, answer in pairs:
-        history.append({"role": "user", "content": question, "time": "earlier"})
-        history.append({"role": "bot", "content": answer, "time": "earlier"})
-
-    return history[-25:]
-
-
 def render_message(role: str, content: str, time_str: str = ""):
     """Render a single WhatsApp-style chat bubble via safe HTML."""
     time_str = html.escape(time_str or _now())
@@ -450,7 +425,7 @@ def upload_file_to_backend(uploaded_file):
         response = requests.post(
             UPLOAD_ENDPOINT,
             files=files,
-            timeout=240,
+            timeout=360,
         )
         response.raise_for_status()
 
@@ -565,26 +540,17 @@ def build_chat_history(max_messages: int = 10) -> list:
             continue
 
         if role == "user":
-            history.append({
-                "role": "user",
-                "content": content
-            })
+            history.append({"role": "user", "content": content})
 
         elif role == "bot":
-            history.append({
-                "role": "assistant",
-                "content": content
-            })
+            history.append({"role": "assistant", "content": content})
 
     return history
 
 
 def query_backend_stream(query: str, chat_history: list = None):
     try:
-        payload = {
-            "query": query,
-            "chat_history": chat_history or []
-        }
+        payload = {"query": query, "chat_history": chat_history or []}
 
         print(f"Calling endpoint: {QUERY_STREAM_ENDPOINT}")  # ← ADD THIS
 
@@ -597,6 +563,7 @@ def query_backend_stream(query: str, chat_history: list = None):
         ) as response:
             response.raise_for_status()
             actual_answer = None
+            citation = None
             full_payload = None
 
             for line in response.iter_lines(decode_unicode=True):
@@ -614,21 +581,30 @@ def query_backend_stream(query: str, chat_history: list = None):
                     print(f"PARSED: {parsed}")  # ← ADD THIS
                     full_payload = parsed
                     actual_answer = parsed.get("answer", "").strip()
+                    citation = parsed.get("policy_citations", "").strip()
                 except json.JSONDecodeError as e:
-                    print(f"JSON DECODE FAILED: {repr(chunk)} | error: {e}")  # ← ADD THIS
+                    print(
+                        f"JSON DECODE FAILED: {repr(chunk)} | error: {e}"
+                    )  # ← ADD THIS
                     continue
 
             if not actual_answer:
-                actual_answer = "I could not generate a response from the backend."
+                actual_answer = "Bot is taking longer time than the usual, please try again after sometime."
 
             print(f"full payload: {full_payload}")
             print(f"actual answer: {actual_answer}")
-            return True, actual_answer
+            print(f"actual citation: {citation}")
+            final_answer = f"{actual_answer} \n[{citation}]"
+            print(f"Final answer :: {final_answer}")
+            return True, final_answer
 
     except requests.exceptions.Timeout:
         return False, "Query request timed out. Please try again."
     except requests.exceptions.ConnectionError:
-        return False, f"Could not connect to backend at {API_BASE_URL}. Please verify FastAPI is running."
+        return (
+            False,
+            f"Could not connect to backend at {API_BASE_URL}. Please verify FastAPI is running.",
+        )
     except requests.exceptions.HTTPError as e:
         error_text = e.response.text if e.response is not None else str(e)
         return False, f"Backend returned HTTP error: {error_text}"
@@ -637,25 +613,7 @@ def query_backend_stream(query: str, chat_history: list = None):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 6. OPTIONAL SIDEBAR DEBUG INFO
-# ─────────────────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("### Backend")
-    st.caption(f"Base URL: `{API_BASE_URL}`")
-    st.caption(f"Upload: `{UPLOAD_ENDPOINT}`")
-    st.caption(f"Query: `{QUERY_STREAM_ENDPOINT}`")
-
-    if st.session_state.last_upload_response is not None:
-        with st.expander("Last upload response"):
-            st.json(st.session_state.last_upload_response)
-
-    if st.session_state.last_query_error:
-        with st.expander("Last query error"):
-            st.error(st.session_state.last_query_error)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 7. APP HEADER
+# 6. APP HEADER
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown(
     """
@@ -670,7 +628,7 @@ st.markdown(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 8. NOTIFICATION DISPLAY
+# 7. NOTIFICATION DISPLAY
 # ─────────────────────────────────────────────────────────────────────────────
 if st.session_state.notification:
     ntype, ntext = st.session_state.notification
@@ -688,7 +646,7 @@ if st.session_state.notification:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 9. FILE UPLOAD / INGESTION
+# 8. FILE UPLOAD / INGESTION
 # ─────────────────────────────────────────────────────────────────────────────
 with st.expander("📂  1. Upload file for ingestion", expanded=True):
     st.markdown(
@@ -752,7 +710,7 @@ with st.expander("📂  1. Upload file for ingestion", expanded=True):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 10. CONDITIONAL PROMPT — NO FILE YET
+# 9. CONDITIONAL PROMPT — NO FILE YET
 # ─────────────────────────────────────────────────────────────────────────────
 if not st.session_state.file_uploaded:
     st.markdown(
@@ -766,7 +724,7 @@ if not st.session_state.file_uploaded:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 11. CONVERSATION WINDOW
+# 10. CONVERSATION WINDOW
 # ─────────────────────────────────────────────────────────────────────────────
 if st.session_state.file_uploaded and st.session_state.file_ingested:
     with st.expander("💬  2. Conversation window", expanded=True):
@@ -792,28 +750,13 @@ if st.session_state.file_uploaded and st.session_state.file_ingested:
                 start_new_chat()
                 st.rerun()
 
-        with col_refresh:
-            if st.button(
-                "🔄 Refresh history",
-                use_container_width=True,
-                help="Loads the last 25 messages from chat history.",
-            ):
-                # Replace this with backend history fetch when available.
-                st.session_state.messages = generate_mock_history()
-                st.session_state.history_refreshed = True
-                st.session_state.notification = (
-                    "info",
-                    "🔄 Last 25 mock messages refreshed.",
-                )
-                st.rerun()
-
         st.markdown(
             "<hr style='margin:0.4rem 0 0.7rem 0; border-color:#e5e7eb;'>",
             unsafe_allow_html=True,
         )
 
         render_chat_window()
-        
+
         user_input = st.chat_input("Ask something about your spend…")
 
         if user_input:
@@ -828,8 +771,7 @@ if st.session_state.file_uploaded and st.session_state.file_ingested:
 
             with st.spinner("Bot is analyzing your spend data..."):
                 success, answer = query_backend_stream(
-                    query=user_input,
-                    chat_history=previous_chat_history
+                    query=user_input, chat_history=previous_chat_history
                 )
 
             if success:
@@ -846,9 +788,8 @@ if st.session_state.file_uploaded and st.session_state.file_ingested:
             st.rerun()
 
 
-
 # ─────────────────────────────────────────────────────────────────────────────
-# 12. FOOTER
+# 11. FOOTER
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown(
     """

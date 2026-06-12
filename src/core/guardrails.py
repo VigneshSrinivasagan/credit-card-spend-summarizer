@@ -30,11 +30,11 @@ so the `guardrails hub install` commands above are still required.
 
 See references/guardrails-demo-guide.md for the full walkthrough.
 """
+
 import os
 import re
 import uuid
 from dotenv import load_dotenv
-
 
 load_dotenv(override=True)
 
@@ -42,11 +42,9 @@ load_dotenv(override=True)
 # The ValidationError import path has shifted across guardrails versions — be
 # defensive so this module imports cleanly regardless of the installed version.
 try:
-   from guardrails.errors import ValidationError
+    from guardrails.errors import ValidationError
 except Exception:  # pragma: no cover - import path varies by version
-   ValidationError = Exception
-
-
+    ValidationError = Exception
 
 
 # ── Configuration ────────────────────────────────────────────────────────────
@@ -54,13 +52,13 @@ except Exception:  # pragma: no cover - import path varies by version
 
 # Presidio entity labels that the PII validator will redact from answers.
 PII_ENTITIES = [
-   "EMAIL_ADDRESS",
-   #"PHONE_NUMBER",
-   #"PERSON",
-   "CREDIT_CARD",
-   "US_SSN",
-   "IBAN_CODE",
-   "IP_ADDRESS"
+    "EMAIL_ADDRESS",
+    # "PHONE_NUMBER",
+    # "PERSON",
+    "CREDIT_CARD",
+    "US_SSN",
+    "IBAN_CODE",
+    "IP_ADDRESS",
 ]
 
 
@@ -118,9 +116,7 @@ CONTEXTUAL_ID_RE = re.compile(
 
 # Optional plain long numeric ID.
 # Use carefully because it can mask real metrics or amounts.
-GENERIC_LONG_ID_RE = re.compile(
-    r"\b\d{6,}\b"
-)
+GENERIC_LONG_ID_RE = re.compile(r"\b\d{6,}\b")
 
 # Optional: catches names in this common answer shape:
 # is Laura Bennett (Customer ID: C-1006)
@@ -135,7 +131,6 @@ CUSTOMER_NAME_LABEL_RE = re.compile(
     r"(\b(?:Customer\s*Name|Name)\s*[:#-]?\s*)([A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){1,3})\b",
     re.IGNORECASE,
 )
-
 
 
 def _mask_domain_pii(text: str) -> str:
@@ -155,40 +150,37 @@ def _mask_domain_pii(text: str) -> str:
         return text
 
     # Mask customer names in predictable RAG answer formats.
-    #text = CUSTOMER_NAME_BEFORE_ID_RE.sub(r"\1<PERSON>\3", text)
-    #text = CUSTOMER_NAME_LABEL_RE.sub(r"\1<PERSON>", text)
+    # text = CUSTOMER_NAME_BEFORE_ID_RE.sub(r"\1<PERSON>\3", text)
+    # text = CUSTOMER_NAME_LABEL_RE.sub(r"\1<PERSON>", text)
 
     # Label-based ID masking first, so labels are preserved.
-    text = CUSTOMER_ID_LABEL_RE.sub(r"\1<CUSTOMER_ID>", text)
-    text = CARD_ID_LABEL_RE.sub(r"\1<CARD_ID>", text)
+    text = CUSTOMER_ID_LABEL_RE.sub(r"\1C-XXXX", text)
+    text = CARD_ID_LABEL_RE.sub(r"\1CC-XXXX", text)
     text = CONTEXTUAL_ID_RE.sub(r"\1<ID>", text)
 
     # Standalone ID masking.
-    text = CUSTOMER_ID_RE.sub("<CUSTOMER_ID>", text)
-    text = CARD_ID_RE.sub("<CARD_ID>", text)
+    text = CUSTOMER_ID_RE.sub("CC-XXXX", text)
+    text = CARD_ID_RE.sub("C-XXXX", text)
 
     # Optional plain long numeric masking.
     # Be careful: this can also mask non-ID values like counts or large metrics.
-    #text = GENERIC_LONG_ID_RE.sub("<NUMERIC_ID>", text)
+    # text = GENERIC_LONG_ID_RE.sub("<NUMERIC_ID>", text)
 
     return text
 
 
 class GuardrailViolation(Exception):
-   """Raised when an input guardrail blocks a request.
+    """Raised when an input guardrail blocks a request.
 
 
-   `guard` is the short name of the guard that fired; `message` is a
-   user-facing explanation suitable for returning in an HTTP 400 response.
-   """
+    `guard` is the short name of the guard that fired; `message` is a
+    user-facing explanation suitable for returning in an HTTP 400 response.
+    """
 
-
-   def __init__(self, guard: str, message: str):
-       self.guard = guard
-       self.message = message
-       super().__init__(f"[{guard}] {message}")
-
-
+    def __init__(self, guard: str, message: str):
+        self.guard = guard
+        self.message = message
+        super().__init__(f"[{guard}] {message}")
 
 
 # ── Lazy guard construction ──────────────────────────────────────────────────
@@ -201,149 +193,129 @@ class GuardrailViolation(Exception):
 _guards = None
 
 
-
-
 def _ensure_guardrails_configured() -> None:
-   """Configure the Guardrails Hub token from the GUARDRAILS_API_KEY env var.
+    """Configure the Guardrails Hub token from the GUARDRAILS_API_KEY env var.
 
 
-   This lets you set the token in `.env` instead of running `guardrails
-   configure` interactively. If `~/.guardrailsrc` already exists (e.g. you ran
-   `guardrails configure`), it is left untouched.
+    This lets you set the token in `.env` instead of running `guardrails
+    configure` interactively. If `~/.guardrailsrc` already exists (e.g. you ran
+    `guardrails configure`), it is left untouched.
 
 
-   Set `GUARDRAILS_USE_REMOTE_INFERENCING=true` to run the validators on
-   Guardrails' hosted endpoint (no local model downloads) — this is the path
-   that actually needs the token at runtime.
-   """
-   api_key = os.getenv("GUARDRAILS_API_KEY")
-   if not api_key:
-       return
+    Set `GUARDRAILS_USE_REMOTE_INFERENCING=true` to run the validators on
+    Guardrails' hosted endpoint (no local model downloads) — this is the path
+    that actually needs the token at runtime.
+    """
+    api_key = os.getenv("GUARDRAILS_API_KEY")
+    if not api_key:
+        return
 
+    # Expose the token to any guardrails code path that reads it from the env.
+    os.environ.setdefault("GUARDRAILS_TOKEN", api_key)
 
-   # Expose the token to any guardrails code path that reads it from the env.
-   os.environ.setdefault("GUARDRAILS_TOKEN", api_key)
+    rc_path = os.path.expanduser("~/.guardrailsrc")
+    if os.path.exists(rc_path):
+        return
 
-
-   rc_path = os.path.expanduser("~/.guardrailsrc")
-   if os.path.exists(rc_path):
-       return
-
-
-   use_remote = os.getenv("GUARDRAILS_USE_REMOTE_INFERENCING", "false")
-   try:
-       with open(rc_path, "w") as rc_file:
-           rc_file.write(
-               f"id={uuid.uuid4()}\n"
-               f"token={api_key}\n"
-               "enable_metrics=false\n"
-               f"use_remote_inferencing={use_remote}\n"
-           )
-   except OSError:
-       # Non-fatal: fall back to any existing guardrails configuration.
-       pass
-
-
+    use_remote = os.getenv("GUARDRAILS_USE_REMOTE_INFERENCING", "false")
+    try:
+        with open(rc_path, "w") as rc_file:
+            rc_file.write(
+                f"id={uuid.uuid4()}\n"
+                f"token={api_key}\n"
+                "enable_metrics=false\n"
+                f"use_remote_inferencing={use_remote}\n"
+            )
+    except OSError:
+        # Non-fatal: fall back to any existing guardrails configuration.
+        pass
 
 
 def _build_guards() -> dict:
-   _ensure_guardrails_configured()
-   try:
-       from guardrails import Guard
-       from guardrails.hub import GuardrailsPII, ToxicLanguage
-   except ImportError as exc:
-       raise RuntimeError(
-           "Guardrails validators are not installed. Run:\n"
-           "  pip install guardrails-ai\n"
-           "  guardrails configure\n"
-           "  guardrails hub install hub://guardrails/guardrails_pii\n"
-           "  guardrails hub install hub://guardrails/toxic_language"
-       ) from exc
+    _ensure_guardrails_configured()
+    try:
+        from guardrails import Guard
+        from guardrails.hub import GuardrailsPII, ToxicLanguage
+    except ImportError as exc:
+        raise RuntimeError(
+            "Guardrails validators are not installed. Run:\n"
+            "  pip install guardrails-ai\n"
+            "  guardrails configure\n"
+            "  guardrails hub install hub://guardrails/guardrails_pii\n"
+            "  guardrails hub install hub://guardrails/toxic_language"
+        ) from exc
 
-
-   return {
-       # Output guard — rewrite the answer, replacing PII with <ENTITY> tags.
-       # Covers GuardrailsPII's built-in entities only; domain customer ids are
-       # masked separately in guard_output (CUSTOMER_ID_RE).
-       "pii": Guard().use(
-           GuardrailsPII(entities=PII_ENTITIES, on_fail="fix")
-       ),
-       # Input guard — raise if the query is toxic.
-       "toxicity": Guard().use(
-           ToxicLanguage(
-               threshold=TOXICITY_THRESHOLD,
-               validation_method="sentence",
-               on_fail="exception",
-           )
-       ),
-   }
-
-
+    return {
+        # Output guard — rewrite the answer, replacing PII with <ENTITY> tags.
+        # Covers GuardrailsPII's built-in entities only; domain customer ids are
+        # masked separately in guard_output (CUSTOMER_ID_RE).
+        "pii": Guard().use(GuardrailsPII(entities=PII_ENTITIES, on_fail="fix")),
+        # Input guard — raise if the query is toxic.
+        "toxicity": Guard().use(
+            ToxicLanguage(
+                threshold=TOXICITY_THRESHOLD,
+                validation_method="sentence",
+                on_fail="exception",
+            )
+        ),
+    }
 
 
 def _get_guards() -> dict:
-   global _guards
-   if _guards is None:
-       _guards = _build_guards()
-   return _guards
-
-
+    global _guards
+    if _guards is None:
+        _guards = _build_guards()
+    return _guards
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
 
 
 def guard_input(query: str) -> None:
-   """Run input guardrails on the user's query.
+    """Run input guardrails on the user's query.
 
-   Raises GuardrailViolation if the query is toxic.
-   """
-   guards = _get_guards()
+    Raises GuardrailViolation if the query is toxic.
+    """
+    guards = _get_guards()
 
-   try:
-       guards["toxicity"].validate(query)
-   except ValidationError as exc:
-       raise GuardrailViolation(
-           "toxic_language",
-           "Your message was flagged as abusive or toxic and cannot be processed.",
-       ) from exc
-
-
+    try:
+        guards["toxicity"].validate(query)
+    except ValidationError as exc:
+        raise GuardrailViolation(
+            "toxic_language",
+            "Your message was flagged as abusive or toxic and cannot be processed.",
+        ) from exc
 
 
 def guard_output(answer: str) -> str:
-   """
-   Redact PII from the model's answer. Returns the cleaned text.
+    """
+    Redact PII from the model's answer. Returns the cleaned text.
 
-   First masks domain-specific customer/card/account IDs using regex.
-   Then runs GuardrailsPII for standard PII like names, emails, phones.
-   Finally runs regex masking again in case Guardrails changed formatting.
-   """
-   if not answer:
-       return answer
+    First masks domain-specific customer/card/account IDs using regex.
+    Then runs GuardrailsPII for standard PII like names, emails, phones.
+    Finally runs regex masking again in case Guardrails changed formatting.
+    """
+    if not answer:
+        return answer
 
-   # First deterministic masking pass.
-   answer = _mask_domain_pii(answer)
+    # First deterministic masking pass.
+    answer = _mask_domain_pii(answer)
 
-   guards = _get_guards()
+    guards = _get_guards()
 
-   try:
-       outcome = guards["pii"].validate(answer)
-       validated = getattr(outcome, "validated_output", None)
+    try:
+        outcome = guards["pii"].validate(answer)
+        validated = getattr(outcome, "validated_output", None)
 
-       if isinstance(validated, str) and validated.strip():
-           answer = validated
+        if isinstance(validated, str) and validated.strip():
+            answer = validated
 
-   except Exception:
-       # Do not return the original raw answer.
-       # We keep the already regex-masked version.
-       pass
+    except Exception:
+        # Do not return the original raw answer.
+        # We keep the already regex-masked version.
+        pass
 
-   # Final deterministic masking pass.
-   answer = _mask_domain_pii(answer)
+    # Final deterministic masking pass.
+    answer = _mask_domain_pii(answer)
 
-   return answer
-
-
-
-
+    return answer

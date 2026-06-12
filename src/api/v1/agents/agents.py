@@ -180,7 +180,7 @@ Use only the tables and columns actually present in the provided schema.
 Common Query Intent Guidance:
 
 1. Monthly spend summary:
-- Join billing_statements with card_transactions using card_id and billing period.
+- Join billing_statements with card_transactions using name and billing period.
 - Use billing_statements.start_date and billing_statements.end_date for the requested billing_month.
 - Sum purchase amounts and count purchase transactions.
 
@@ -229,8 +229,7 @@ Text Search Rules:
 Date Handling Rules:
 - If the user provides a billing month like "March 2026", convert it to '2026-03'.
 - If the user asks for "this month" or "last month" and no reference date is supplied, use the latest billing_month available in billing_statements for the relevant card.
-- If card_id is provided, resolve billing months for that card only.
-- If no card_id is provided but the question requires one, generate the safest possible query using available filters and limits.
+- Generate the safest possible query using available filters and limits.
 
 Database schema:
 {schema}""",
@@ -438,7 +437,7 @@ Citation rules:
 - page_no: comma-separated page numbers, aligned with the documents above.
 - policy_citations: readable citation combining each document and its page, for example: "KB_Credit_Card_Spend_Summarizer.pdf, Page 5".
 - Always cite every document/page used to answer the question.
-- If no relevant context is found, leave citation fields empty or state "No relevant source found" based on your response schema.""",
+- If no relevant context is found, leave citation fields empty""",
             ),
             (
                 "human",
@@ -562,7 +561,7 @@ def evaluation_router(state: RAGState) -> str:
     if score >= 90:
         return "accepted"
 
-    if retries >= 3:
+    if retries >= 2:
         return "accepted"
 
     return "retry"
@@ -691,7 +690,7 @@ def rewrite_followup_question(state: RAGState) -> str:
     Example:
     Previous answer: Robert Clarke, Customer ID C-1003 has highest credit limit.
     Current query: what is his available limit as of now?
-    Rewritten query: What is the available credit limit for Robert Clarke, Customer ID C-1003, as of now?
+    Rewritten query: What is the available credit limit for Robert Clarke as of now?
     """
 
     llm = _get_llm()
@@ -712,7 +711,8 @@ def rewrite_followup_question(state: RAGState) -> str:
 Rules:
 - Use previous conversation to resolve pronouns and references.
 - Resolve words like his, her, it, that, this, same, above, previous, that customer, that card, that category.
-- Preserve important identifiers such as customer_id, card_id, account_id, customer name, merchant, month, category, and date.
+- Preserve important identifiers such as account_id, customer name, merchant, month, category, and date.
+- Do not include customer_id or card_id for rewritting
 - Do not answer the question.
 - Only return the rewritten standalone question.
 - If the question is already standalone, return it unchanged.
@@ -720,13 +720,13 @@ Rules:
 Examples:
 Previous conversation:
 User: Which customer has the highest credit limit?
-Assistant: The customer with the highest credit limit is Robert Clarke (Customer ID: C-1003).
+Assistant: The customer with the highest credit limit is Robert Clarke.
 
 Current question:
 What is his available limit as of now?
 
 Standalone question:
-What is the available credit limit for Robert Clarke, Customer ID C-1003, as of now?""",
+What is the available credit limit for Robert Clarke as of now?""",
             ),
             (
                 "human",
@@ -814,9 +814,19 @@ def dynamic_tool_agent_node(state: RAGState) -> RAGState:
     # ---------------------------------------------------------------------
     planner_prompt = ChatPromptTemplate.from_messages(
         [
-            (
+            ( 
                 "system",
                 """You are a dynamic tool-calling supervisor for the NorthStar Bank Credit Card Spend Summarizer project.
+
+                *SCOPE*
+Handle only banking and financial queries, plus greetings.
+Greetings: respond briefly without invoking any tools.
+Follow-up messages referencing a banking entity (account, card, loan, transaction, customer)
+from earlier in the conversation are banking queries — handle them even without explicit
+banking keywords (e.g. "what's the customer name?", "show me the fees").
+Non-banking topics with no prior banking context: deny politely —
+"I can only assist with banking and financial services queries."
+ 
 
 You have access to two tools:
 
@@ -825,7 +835,6 @@ You have access to two tools:
 Use sql_lookup when the user asks for actual data from the PostgreSQL database, including:
 - customer details
 - card details
-- card_id or customer_id specific questions
 - transactions
 - billing statements
 - outstanding amount
@@ -848,6 +857,7 @@ Use sql_lookup when the user asks for actual data from the PostgreSQL database, 
 2. document_lookup
 
 Use document_lookup when the user asks for knowledge-base or product-guide information, including:
+- card colors
 - card variants and features
 - reward rules
 - annual fee rules
@@ -880,9 +890,13 @@ Conversation memory rules:
 - Do not deviate from the active conversation topic.
 
 Examples:
+- "Who am I" -> Do not call any tool answer from history
+- "what is my name" -> Do not call any tool answer from history
+- "what is the name of the customer CC-881001" -> sql_lookup only.
 - "What is the spend for card CC-881001 in March 2026?" -> sql_lookup only.
 - "What is the forex markup rule?" -> document_lookup only.
 - "what is his available limit" -> sql_lookup because his refers to previous customer in the conversation.
+- "what is his credit card color" -> sql_lookup to get the credit card name and document_lookup to get the color of the card
 - "Is card CC-881001 eligible for annual fee waiver and explain the rule?" -> sql_lookup and document_lookup.
 - "How many reward points did Sarah earn and what is the redemption value?" -> sql_lookup and document_lookup if redemption value is in the document.
 - Previous: "What is my highest spend category?" Current: "Which merchants contributed to it?" -> sql_lookup because "it" refers to the previous category.""",

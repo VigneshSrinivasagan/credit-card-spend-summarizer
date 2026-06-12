@@ -6,12 +6,7 @@ app = FastAPI()
 
 @app.get("/")
 def read_root():
-    return {"Message": "Hello World"}
-
-
-@app.get("/health")
-def health_check():
-    return {"status": "ok"}
+    return {"Message": "The creditcard summarization bot is up and running. please check .../docs for more"}
 
 
 app.include_router(multimodel_rag_route.router, prefix="/api/v1")
